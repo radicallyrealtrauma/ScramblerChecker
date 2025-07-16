@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Scrambler Check</title>
+  <style>
+    body { background: #000; color: #eee; font-family: sans-serif; text-align: center; padding: 20px; }
+    h1 { color: #00ff99; }
+    button, input[type="file"] {
+      margin: 10px;
+      padding: 10px 15px;
+      background: #222;
+      color: #00ff99;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #formatNotice, #alert, #envWarning {
+      color: #ff4444;
+      margin-top: 10px;
+      font-size: 0.9em;
+    }
+    .progressBar {
+      width: 100%;
+      background: #222;
+      border-radius: 5px;
+      margin: 20px auto;
+      height: 20px;
+      display: none;
+    }
+    .progressFill {
+      height: 100%;
+      width: 0%;
+      background: #00ff99;
+      border-radius: 5px;
+    }
+    #reportSection {
+      display: none;
+      background: #111;
+      color: #eee;
+      text-align: left;
+      margin-top: 30px;
+      padding: 20px;
+      border-radius: 6px;
+    }
+    #reportSection h2 { color: #00ff99; margin-top: 0; }
+    #reportSection strong { color: #00ff99; }
+    #footer {
+      margin-top: 40px;
+      font-size: 0.85em;
+      color: #00ff99;
+    }
+  </style>
+</head>
+<body>
+  <h1>Scrambler Check</h1>
+  <p>Manual forensic audio inspection. No uploads. Full local control.</p>
+
+  <div id="formatNotice">Supported formats: WAV, MP3, M4A. Convert offline before uploading.</div>
+
+  <input type="file" id="audioInput" accept="audio/*">
+  <button id="uploadBtn">Upload Selected File</button>
+  <button id="analyzeBtn">Analyze</button>
+  <button id="playBtn">Play Audio</button>
+  <button id="reportBtn">Generate Report</button>
+
+  <div id="alert"></div>
+  <div id="envWarning"></div>
+
+  <div id="uploadProgress" class="progressBar"><div id="uploadFill" class="progressFill"></div></div>
+  <div id="analyzeProgress" class="progressBar"><div id="analyzeFill" class="progressFill"></div></div>
+
+  <div id="reportSection"></div>
+  <div id="footer">Built by <strong>@radicallyrealtrauma</strong></div>
+
+<script>
+  const audioInput = document.getElementById("audioInput");
+  const uploadBtn = document.getElementById("uploadBtn");
+  const analyzeBtn = document.getElementById("analyzeBtn");
+  const playBtn = document.getElementById("playBtn");
+  const reportBtn = document.getElementById("reportBtn");
+  const alert = document.getElementById("alert");
+  const envWarning = document.getElementById("envWarning");
+  const uploadProgress = document.getElementById("uploadProgress");
+  const uploadFill = document.getElementById("uploadFill");
+  const analyzeProgress = document.getElementById("analyzeProgress");
+  const analyzeFill = document.getElementById("analyzeFill");
+  const reportSection = document.getElementById("reportSection");
+
+  let audioBuffer = null;
+  let decodedAudio = null;
+  let spoofFlags = [];
+  let filename = "unknown";
+  let audioCtx = null;
+  let userIP = "Not retrieved";
+
+  fetch("https://api.ipify.org?format=json")
+    .then(res => res.json())
+    .then(data => { userIP = data.ip; })
+    .catch(() => { userIP = "Unavailable"; });
+
+  uploadBtn.addEventListener("click", () => {
+    const file = audioInput.files[0];
+    if (!file) return alert.textContent = "⚠️ No file selected.";
+    filename = file.name;
+    const ext = filename.split('.').pop().toLowerCase();
+    const allowed = ["wav", "mp3", "m4a"];
+    if (!allowed.includes(ext)) {
+      return alert.textContent = "❌ Incompatible format: ." + ext + ". Use WAV or MP3.";
+    }
+
+    alert.textContent = "📁 Loading file: " + filename;
+    uploadProgress.style.display = "block";
+    uploadFill.style.width = "0%";
+    decodedAudio = null;
+    spoofFlags = [];
+    envWarning.textContent = "";
+    reportSection.style.display = "none";
+
+    const reader = new FileReader();
+    reader.onprogress = evt => {
+      if (evt.lengthComputable) {
+        const percent = (evt.loaded / evt.total) * 100;
+        uploadFill.style.width = percent + "%";
+      }
+    };
+    reader.onloadend = () => {
+      audioBuffer = reader.result;
+      uploadFill.style.width = "100%";
+      setTimeout(() => uploadProgress.style.display = "none", 1000);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  analyzeBtn.addEventListener("click", async () => {
+    if (!audioBuffer) return alert.textContent = "⚠️ Upload first.";
+    analyzeProgress.style.display = "block";
+    analyzeFill.style.width = "25%";
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      decodedAudio = await audioCtx.decodeAudioData(audioBuffer);
+      analyzeFill.style.width = "75%";
+    } catch {
+      decodedAudio = null;
+      analyzeFill.style.width = "0%";
+      return alert.textContent = "❌ Decode failed. Convert file offline.";
+    }
+
+    spoofFlags = [];
+    const ua = navigator.userAgent;
+    if (ua.includes("Headless") || /vmware|virtualbox|sandbox/i.test(ua)) spoofFlags.push("Virtualized/headless browser");
+    if (!navigator.language || !navigator.hardwareConcurrency) spoofFlags.push("Navigator fingerprint incomplete");
+    if (screen.width < 320 || screen.height < 320) spoofFlags.push("Screen resolution unusually low");
+
+    envWarning.textContent = spoofFlags.length ?
+      "⚠️ Environment warning: " + spoofFlags.join(", ") :
+      "✅ Environment appears legitimate";
+
+    analyzeFill.style.width = "100%";
+    setTimeout(() => analyzeProgress.style.display = "none", 1000);
+  });
+
+  playBtn.addEventListener("click", () => {
+    if (!decodedAudio || !audioCtx) return alert.textContent = "⚠️ Run Analyze first.";
+    const source = audioCtx.createBufferSource();
+    source.buffer = decodedAudio;
+    source.connect(audioCtx.destination);
+    source.start();
+  });
+
+  reportBtn.addEventListener("click", () => {
+    if (!decodedAudio) return alert.textContent = "❌ No analysis data. Run Analyze first.";
+
+    let html = `<h2>SCRAMBLER CHECK REPORT</h2>`;
+    html += `<p><strong>Filename:</strong> ${filename}</p>`;
+    html += `<p><strong>Duration:</strong> ${decodedAudio.duration.toFixed(2)} sec</p>`;
+    html += `<p><strong>Sample Rate:</strong> ${decodedAudio.sampleRate} Hz</p>`;
+    html += `<p><strong>Platform:</strong> ${navigator.platform}</p>`;
+    html += `<p><strong>User Agent:</strong> ${navigator.userAgent}</p>`;
+    html += `<p><strong>Resolution:</strong> ${screen.width}x${screen.height}</p>`;
+    html += `<p><strong>Public IP:</strong> ${userIP}</p>`;
+    if (spoofFlags.length) {
+      html += `<p><strong>Environment Flags:</strong></p><ul>`;
+      spoofFlags.forEach(f => html += `<li>${f}</li>`);
+      html += `</ul>`;
+    } else {
+      html += `<p><strong>Environment Check:</strong> ✅ No spoof flags detected</p>`;
+    }
+    html += `<p style="margin-top:20px;">Use your browser's <strong>Print</strong> or <strong>Save As PDF</strong> to retain this report.</p>`;
+
+    reportSection.innerHTML = html;
+    reportSection.style.display = "block";
+    reportSection.scrollIntoView({ behavior: "smooth" });
+  });
+</script>
+</body>
+</html>
